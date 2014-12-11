@@ -80,33 +80,51 @@ Vec radiance(const Ray &r, int depth, unsigned short *Xi){
                           radiance(reflRay,depth,Xi)*Re+radiance(Ray(x,tdir),depth,Xi)*Tr); 
 }
 
+@implementation RayTracerThreadParam
+
+@end
+
 @implementation RayTracerThread
 
 static int width = 400;
 static int height = 400;
-static unsigned char* data;
-static NSLock* threadLock;
+static unsigned char* data = nil;
+static NSLock* threadLock = nil;
+static int activeThreadCount = 0;
+static int threadNumber = 0;
 
++ (void)initThread:(int)w canvasHeight:(int)h
+{
+    width = w;
+    height = h;
+    
+    if (threadLock == nil)
+        threadLock = [[NSLock alloc] init];
+
+    if (data == nil)
+        data = new unsigned char[width * height * 4];
+}
 
 + (void)ThreadMain:(id)param
 {
-    threadLock = [[NSLock alloc] init];
-    
-    width = 400;
-    height = 400;
-    
-    //[threadLock lock];
-    data = new unsigned char[width * height * 4];
-    //[threadLock unlock];
+    [threadLock lock];
+    activeThreadCount++;
+    [threadLock unlock];
 
-    //int w=1024, h=768, samps = 1;//argc==2 ? atoi(argv[1])/4 : 1; // # samples
-    int samps = 16;
-    int debugCount = 0;
+    int samps = 32;
     Ray cam(Vec(50,52,295.6), Vec(0,-0.042612,-1).norm()); // cam pos, dir
     Vec cx=Vec(width*.5135/height), cy=(cx%cam.d).norm()*.5135, r, *c=new Vec[width*height];
-//#pragma omp parallel for schedule(dynamic, 1) private(r)       // OpenMP
-    for (int y=0; y<height; y++){                       // Loop over image rows
-        fprintf(stderr,"\rRendering (%d spp) %5.2f%%",samps*4,100.*y/(height-1));
+
+    int threadCount = [(RayTracerThreadParam*)param threadCount];
+    int threadIndex = [(RayTracerThreadParam*)param threadIndex];
+    
+    // divide height range into different threads
+    int heightPerThread = height / threadCount;
+    int heightBegin = threadIndex * heightPerThread;
+    int heightEnd = (threadIndex == threadCount - 1) ? height : (threadIndex + 1) * heightPerThread;
+    
+    for (int y=heightBegin; y<heightEnd; y++){                       // Loop over image rows
+        fprintf(stderr,"\rRendering thread %d (%d spp) %5.2f%%", threadIndex, samps*4,100.*y/(height-1));
         for (unsigned short x=0, Xi[3]={0,0,static_cast<unsigned short>(y*y*y)}; x<width; x++)   // Loop cols
             for (int sy=0, i=(height-y-1)*width+x; sy<2; sy++)     // 2x2 subpixel rows
                 for (int sx=0; sx<2; sx++, r=Vec()){        // 2x2 subpixel cols
@@ -116,20 +134,33 @@ static NSLock* threadLock;
                         Vec d = cx*( ( (sx+.5 + dx)/2 + x)/width - .5) +
                         cy*( ( (sy+.5 + dy)/2 + y)/height - .5) + cam.d;
                         r = r + radiance(Ray(cam.o+d*140,d.norm()),0,Xi)*(1./samps);
-                        debugCount++;
                     } // Camera rays are pushed ^^^^^ forward to start in interior
                     c[i] = c[i] + Vec(clamp(r.x),clamp(r.y),clamp(r.z))*.25;
                     
-                    //[threadLock lock];
+                    [threadLock lock];
                     data[i*4+1] = toInt(c[i].x);
                     data[i*4+2] = toInt(c[i].y);
                     data[i*4+3] = toInt(c[i].z);
                     data[i*4+0] = 0;
-                    //[threadLock unlock];
                     
-                    [param setNeedsDisplay:true];
+                    threadNumber++;
+                    [threadLock unlock];
+                    
+                    // We only update view in one thread
+                    if (threadNumber >= activeThreadCount)
+                    {
+                        [[(RayTracerThreadParam*)param view] setNeedsDisplay:true];
+
+                        [threadLock lock];
+                        threadNumber = 0;
+                        [threadLock unlock];
+                    }
                 }
     }
+    
+    [threadLock lock];
+    activeThreadCount--;
+    [threadLock unlock];
 }
 
 + (unsigned int*)GetImageData

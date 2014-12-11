@@ -23,9 +23,21 @@
     if (self) {
         // Initialization code here.
         
-        NSThread *thread = [[NSThread alloc] initWithTarget:[RayTracerThread class] selector:@selector(ThreadMain:) object:self];
-        [thread setStackSize:1024 * 1024 * 16];
-        [thread start];
+        
+        int threadCount = 4;
+        [RayTracerThread initThread:self.bounds.size.width canvasHeight:self.bounds.size.height];
+        
+        for (int i=0; i<threadCount; i++)
+        {
+            RayTracerThreadParam *param = [RayTracerThreadParam alloc];
+            param.threadCount = threadCount;
+            param.threadIndex = i;
+            param.view = self;
+            
+            NSThread *thread = [[NSThread alloc] initWithTarget:[RayTracerThread class] selector:@selector(ThreadMain:) object:param];
+            [thread setStackSize:1024 * 1024 * 16];
+            [thread start];
+        }
         
         //[RayTracerThread ThreadMain:nil];
     }
